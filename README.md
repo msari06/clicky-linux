@@ -6,7 +6,10 @@
 
 Clicky is the little AI buddy that lives next to your cursor. Hit a hotkey, ask a question about whatever is on your screen, and a streaming bubble answers right there — and if the model points to something, a blue cursor flies over and taps it.
 
-**MVP scope:** push-to-text (keyboard, not voice yet), OpenAI vision models only. Hotkey → input pops up → type → screenshot + question go to the model → answer streams into a bubble → if the response contains `[POINT:x,y]`, the blue cursor flies there.
+Clicky has two modes you can flip between in the input bar:
+
+- **Vision mode** (default): screenshot + question → OpenAI vision via your Cloudflare Worker → answer streams into a bubble, optionally pointing at something on screen.
+- **Code mode**: prompt → spawns `claude -p` ([Claude Code](https://docs.anthropic.com/en/docs/claude-code)) as a subprocess in a configured workspace → its progress (text + tool calls) streams into the same bubble. Lets you ask Clicky to *do* things in a directory, not just describe what it sees.
 
 ## Quick start
 
@@ -33,6 +36,18 @@ make run
 ```
 
 A blue triangle icon shows up in the system tray. Press **Ctrl+Alt+Space** to open the input.
+
+## Code mode (Claude Code agent)
+
+Click the small `vision` / `code` pill on the left of the input bar to switch. In Code mode:
+
+- Your prompt is handed to a `claude -p` subprocess in the workspace shown under the input. Click the workspace chip to pick a different directory.
+- For one-off overrides, start your prompt with `@/path/to/dir ` (or `@"/path with spaces" `) — that directory is used as the cwd for that single call.
+- The bubble streams Claude Code's prose and shows compact tool chips (`› Read foo.py`, `✎ Edit bar.py`, etc.) so you can see what it's doing.
+- **Shell commands are blocked by default**. Flip the `shell: off` pill to `shell: on` to allow `Bash` — you'll get a confirmation dialog the first time, because this opens the door to `rm`, `git push`, package installs, and anything else the model decides to run. Toggle off when you don't need it.
+- File edits go through with `--permission-mode acceptEdits`; check `git diff` if you want to review what changed.
+
+Requirements: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (`claude auth`). Clicky calls the `claude` binary from PATH; override with `CLAUDE_CODE_PATH` in `.env`.
 
 ## Architecture (short version)
 
@@ -62,6 +77,8 @@ Blue cursor bezier animation
 | Overlay + cursor | `clicky/ui/overlay.py`, `cursor.py` | `OverlayWindow.swift` |
 | Response bubble | `clicky/ui/response_bubble.py` | `CompanionResponseOverlay.swift` |
 | Worker proxy | `worker/src/index.ts` | same idea, OpenAI-flavored |
+| Claude Code agent | `clicky/llm/claude_code.py` | (new — no macOS counterpart yet) |
+| Mode + workspace persistence | `clicky/state_store.py` | (new — no macOS counterpart yet) |
 
 ## Linux-specific choices
 
@@ -80,8 +97,11 @@ make worker-dev      # Run the worker locally at http://localhost:8787
 make dev             # Run the app with DEBUG logging
 ```
 
-## Roadmap (post-MVP)
+## Roadmap
 
+- [x] Code mode — Claude Code subprocess as a Clicky backend
+- [ ] Native GUI tools (click, type, scroll) via OpenAI tool-calling, with per-action confirmation bubbles
+- [ ] Per-tool confirmation in Code mode via Claude Code `PreToolUse` hooks (IPC socket)
 - [ ] Microphone + AssemblyAI streaming (push-to-talk)
 - [ ] ElevenLabs TTS playback
 - [ ] Wayland fallback (XDG Portal screenshot, evdev hotkey)
