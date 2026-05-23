@@ -37,6 +37,13 @@ make run
 
 A blue triangle icon shows up in the system tray. Press **Ctrl+Alt+Space** to open the input.
 
+## The response bubble
+
+- Long answers scroll inside the bubble (auto-follows the streaming bottom, stays put when you scroll up to re-read).
+- Text is selectable — drag across it to copy.
+- **Drag** the bubble by clicking anywhere on its padding (any spot that isn't the text, scrollbar, or × button). The cursor turns into a move handle when you can grab.
+- **Resize** from the bottom-right corner (the cursor becomes a diagonal arrow there). Once you've resized, the bubble keeps its size for that response. Sending a new prompt resets it back to auto-fit.
+
 ## Code mode (Claude Code agent)
 
 Click the small `vision` / `code` pill on the left of the input bar to switch. In Code mode:

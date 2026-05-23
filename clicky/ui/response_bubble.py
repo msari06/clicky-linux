@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
     QStackedLayout,
     QVBoxLayout,
@@ -25,19 +26,139 @@ THINKING_SENTINEL = "…"
 # bubble as auto-following the stream and snap to bottom after new text.
 AUTO_FOLLOW_SLACK_PX = 12
 
+# Width of the bottom-right corner zone that triggers diagonal resize on click.
+# Has to be big enough to grab comfortably with the mouse but small enough that
+# the rest of the card padding stays a drag zone.
+RESIZE_CORNER_PX = 14
+
+# Width of the inner card padding considered a drag handle on left/top/right.
+# Anywhere on the card that isn't an interactive child (label, scrollbar, stop
+# button) is also treated as a drag handle — this is just a hint for the cursor.
+DRAG_EDGE_PX = 14
+
+# Minimum size the user is allowed to shrink the bubble to.
+MIN_BUBBLE_WIDTH = 280
+MIN_BUBBLE_HEIGHT = 80
+
+# QT's sentinel for "no maximum" — used to lift the auto-mode size caps when
+# the user takes manual control of the window size.
+_QWIDGETSIZE_MAX = 16777215
+
+
+class _Card(QFrame):
+    """The visible frosted card inside the bubble.
+
+    Owns the move/resize gesture state. The bubble's outer QWidget is moved
+    and resized in response to drags landing on the card's padding (anywhere
+    not occupied by the text label, scrollbar, or × button).
+    """
+
+    user_resized = pyqtSignal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMouseTracking(True)
+        self._drag_origin: tuple[QPoint, QPoint] | None = None
+        self._resize_origin: tuple[QPoint, QSize] | None = None
+
+    # --- gesture helpers --------------------------------------------------
+
+    def _is_in_resize_zone(self, local: QPoint) -> bool:
+        return (
+            local.x() >= self.width() - RESIZE_CORNER_PX
+            and local.y() >= self.height() - RESIZE_CORNER_PX
+        )
+
+    def _is_in_drag_zone(self, local: QPoint) -> bool:
+        """True if the click landed on card padding (not on an interactive child)."""
+        child = self.childAt(local)
+        if child is None:
+            return True
+        node: QWidget | None = child
+        while node is not None and node is not self:
+            if isinstance(node, (QLabel, QScrollBar, QPushButton)):
+                return False
+            node = node.parentWidget()
+        return True
+
+    # --- mouse events -----------------------------------------------------
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt naming)
+        if event.button() == Qt.MouseButton.LeftButton:
+            local = event.position().toPoint()
+            window = self.window()
+            global_pos = event.globalPosition().toPoint()
+            if self._is_in_resize_zone(local):
+                self._resize_origin = (global_pos, window.size())
+                event.accept()
+                return
+            if self._is_in_drag_zone(local):
+                self._drag_origin = (global_pos, window.pos())
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        global_pos = event.globalPosition().toPoint()
+        window = self.window()
+        if self._drag_origin is not None:
+            origin_global, origin_pos = self._drag_origin
+            delta = global_pos - origin_global
+            window.move(origin_pos + delta)
+            event.accept()
+            return
+        if self._resize_origin is not None:
+            origin_global, origin_size = self._resize_origin
+            delta = global_pos - origin_global
+            new_w = max(MIN_BUBBLE_WIDTH, origin_size.width() + delta.x())
+            new_h = max(MIN_BUBBLE_HEIGHT, origin_size.height() + delta.y())
+            window.resize(new_w, new_h)
+            self.user_resized.emit()
+            event.accept()
+            return
+
+        local = event.position().toPoint()
+        if self._is_in_resize_zone(local):
+            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        elif self._is_in_drag_zone(local):
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._drag_origin is not None or self._resize_origin is not None:
+            self._drag_origin = None
+            self._resize_origin = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self.unsetCursor()
+        super().leaveEvent(event)
+
 
 class ResponseBubble(QWidget):
     """Streaming text bubble shown next to the cursor.
 
     Top-level frameless top-most window. Renders as a frosted-glass card with
-    a leading accent stripe, a soft drop shadow, and a small × stop button.
-    Until the first real text token arrives we show three pulsing dots
-    instead of the literal "…" string so the loading state feels alive.
+    a soft drop shadow and a small × stop button.
 
-    Long responses scroll inside the card: the label sits in a QScrollArea
-    capped at `Sizes.BUBBLE_MAX_HEIGHT`. While streaming we auto-follow the
-    bottom; if the user scrolls up to re-read something we leave them put
-    until they return to the bottom.
+    Sizing modes:
+      - **auto** (default): for each new chunk the bubble re-fits to its
+        content up to `BUBBLE_MAX_HEIGHT`, then scrolls.
+      - **manual**: once the user drags the bottom-right corner the bubble
+        keeps the size they gave it. New chunks update the text but leave the
+        outer dimensions alone (scrollbar absorbs overflow). The next
+        thinking-dots state resets back to auto.
+
+    The card itself is draggable from any non-interactive area (the padding
+    around the label, scrollbar, and stop button). Hovering the bottom-right
+    14 px exposes a diagonal-resize cursor.
+
+    Auto-follow streaming: when text grows we snap the scrollbar to bottom,
+    unless the user has scrolled up to re-read — then we leave them put.
     """
 
     stop_requested = pyqtSignal()
@@ -51,15 +172,23 @@ class ResponseBubble(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setMouseTracking(True)
+        self.setMinimumSize(
+            MIN_BUBBLE_WIDTH + 2 * DEFAULT_SHADOW_MARGIN,
+            MIN_BUBBLE_HEIGHT + 2 * DEFAULT_SHADOW_MARGIN,
+        )
+
+        self._user_sized = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(
             DEFAULT_SHADOW_MARGIN, DEFAULT_SHADOW_MARGIN, DEFAULT_SHADOW_MARGIN, DEFAULT_SHADOW_MARGIN
         )
 
-        self._card = QFrame(self)
+        self._card = _Card()
         self._card.setObjectName("bubble")
         self._card.setStyleSheet(self._stylesheet())
+        self._card.user_resized.connect(self._on_user_resize)
         outer.addWidget(self._card)
 
         apply_drop_shadow(self._card, blur=24, dy=6, alpha=110)
@@ -68,9 +197,6 @@ class ResponseBubble(QWidget):
         inner.setContentsMargins(16, 12, 6, 12)
         inner.setSpacing(8)
 
-        # The scrollable text area and the thinking dots share a slot; we swap
-        # which one is visible based on whether we've received a real text
-        # token yet.
         self._text_stack = QWidget(self._card)
         stack = QStackedLayout(self._text_stack)
         stack.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +223,10 @@ class ResponseBubble(QWidget):
         self._scroll.setMaximumWidth(Sizes.BUBBLE_MAX_WIDTH + 14)
         self._scroll.viewport().setAutoFillBackground(False)
         self._scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        # Forward mouse-tracking from the scroll viewport so cursor hint updates
+        # work over the scroll area's blank background. Text selection inside
+        # the label still works because the label captures press events first.
+        self._scroll.viewport().setMouseTracking(True)
         stack.addWidget(self._scroll)
 
         thinking_wrap = QWidget()
@@ -192,8 +322,7 @@ class ResponseBubble(QWidget):
 
     def set_text(self, text: str) -> None:
         if text == THINKING_SENTINEL:
-            # Reset any leftover sizing from a previous long response so the
-            # bubble shrinks back down to dots-only height.
+            self._reset_to_auto_sizing()
             self._label.clear()
             self._scroll.setFixedHeight(28)
             self._stack.setCurrentIndex(self._thinking_index)
@@ -204,25 +333,18 @@ class ResponseBubble(QWidget):
         self._stack.setCurrentIndex(self._scroll_index)
 
         sb = self._scroll.verticalScrollBar()
-        # "At bottom" means the user is following the stream — preserve that
-        # after we re-layout. If they've scrolled up to read, leave them put.
         was_following = sb.value() >= sb.maximum() - AUTO_FOLLOW_SLACK_PX
 
         self._label.setText(text)
-        # QLabel.heightForWidth gives a stable height for the wrapped text at
-        # our fixed wrap width. The scroll area itself doesn't grow with its
-        # inner widget in widgetResizable mode, so we set its height by hand —
-        # capped at BUBBLE_MAX_HEIGHT, which is when the scrollbar kicks in.
-        wrap_w = Sizes.BUBBLE_MAX_WIDTH
-        content_h = max(self._label.heightForWidth(wrap_w), self._label.sizeHint().height())
-        target_h = min(content_h + 4, Sizes.BUBBLE_MAX_HEIGHT)
-        self._scroll.setFixedHeight(target_h)
-        self.adjustSize()
+
+        if not self._user_sized:
+            wrap_w = Sizes.BUBBLE_MAX_WIDTH
+            content_h = max(self._label.heightForWidth(wrap_w), self._label.sizeHint().height())
+            target_h = min(content_h + 4, Sizes.BUBBLE_MAX_HEIGHT)
+            self._scroll.setFixedHeight(target_h)
+            self.adjustSize()
 
         if was_following:
-            # Snap now using the current scrollbar range, then again on the
-            # next event-loop tick — the label may still be laying out after
-            # the text change, which would otherwise leave us short of bottom.
             sb.setValue(sb.maximum())
             QTimer.singleShot(0, lambda: sb.setValue(sb.maximum()))
 
@@ -244,3 +366,28 @@ class ResponseBubble(QWidget):
             self.stop_requested.emit()
             return
         super().keyPressEvent(event)
+
+    # --- sizing-mode internals --------------------------------------------
+
+    def _on_user_resize(self) -> None:
+        """First time the user drags the corner, switch to manual sizing.
+
+        We lift the per-widget size caps so the label/scroll can fill whatever
+        the user gives them, and stop driving `_scroll.fixedHeight` in
+        `set_text`. The next thinking-dots state resets us back to auto.
+        """
+        if self._user_sized:
+            return
+        self._user_sized = True
+        self._scroll.setMinimumHeight(0)
+        self._scroll.setMaximumHeight(_QWIDGETSIZE_MAX)
+        self._scroll.setMaximumWidth(_QWIDGETSIZE_MAX)
+        self._label.setMaximumWidth(_QWIDGETSIZE_MAX)
+        self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def _reset_to_auto_sizing(self) -> None:
+        self._user_sized = False
+        self._scroll.setMaximumHeight(Sizes.BUBBLE_MAX_HEIGHT)
+        self._scroll.setMaximumWidth(Sizes.BUBBLE_MAX_WIDTH + 14)
+        self._label.setMaximumWidth(Sizes.BUBBLE_MAX_WIDTH)
+        self._scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
