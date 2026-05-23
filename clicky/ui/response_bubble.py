@@ -84,6 +84,10 @@ class _Card(QFrame):
     # --- mouse events -----------------------------------------------------
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 (Qt naming)
+        # Defensive: a fresh press resets any stale gesture state so we never
+        # carry a previous drag/resize into a new click.
+        self._drag_origin = None
+        self._resize_origin = None
         if event.button() == Qt.MouseButton.LeftButton:
             local = event.position().toPoint()
             window = self.window()
@@ -99,6 +103,23 @@ class _Card(QFrame):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        # Safety net: if the left button isn't held, any drag/resize in flight
+        # must be stale (a release event got eaten — e.g. the cursor briefly
+        # left the window during a fast drag and the WM swallowed it on its
+        # way back). Clear state so this doesn't turn into a sticky drag.
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            self._drag_origin = None
+            self._resize_origin = None
+            local = event.position().toPoint()
+            if self._is_in_resize_zone(local):
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            elif self._is_in_drag_zone(local):
+                self.setCursor(Qt.CursorShape.SizeAllCursor)
+            else:
+                self.unsetCursor()
+            super().mouseMoveEvent(event)
+            return
+
         global_pos = event.globalPosition().toPoint()
         window = self.window()
         if self._drag_origin is not None:
@@ -116,14 +137,6 @@ class _Card(QFrame):
             self.user_resized.emit()
             event.accept()
             return
-
-        local = event.position().toPoint()
-        if self._is_in_resize_zone(local):
-            self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-        elif self._is_in_drag_zone(local):
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-        else:
-            self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
