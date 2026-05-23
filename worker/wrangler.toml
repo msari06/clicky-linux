@@ -1,0 +1,7 @@
+name = "clicky-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# ElevenLabs voice ID — TTS özelliğini ekleyince doldur, MVP'de gerekmez.
+# [vars]
+# ELEVENLABS_VOICE_ID = "your-voice-id-here"

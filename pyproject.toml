@@ -1,0 +1,43 @@
+[project]
+name = "clicky-linux"
+version = "0.1.0"
+description = "Clicky for Linux — AI buddy that lives next to your cursor"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mehmet Sari" }]
+
+dependencies = [
+    "PyQt6>=6.7.0",
+    "qasync>=0.27.1",
+    "httpx>=0.27.0",
+    "httpx-sse>=0.4.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.1",
+    "pynput>=1.7.7",
+    "mss>=9.0.1",
+    "Pillow>=10.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-qt>=4.4.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+clicky = "clicky.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clicky"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"

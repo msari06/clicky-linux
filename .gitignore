@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+
+# Env
+.env
+.env.local
+worker/.dev.vars
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Worker
+worker/node_modules/
+worker/.wrangler/
+
+# Original macOS repo (kept locally for reference only, not version controlled)
+clicky_original/
+
+# Claude / agent settings
+.claude/
