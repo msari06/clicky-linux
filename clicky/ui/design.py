@@ -69,5 +69,6 @@ class Sizes:
     PANEL_WIDTH = 340
     INPUT_HEIGHT = 44
     BUBBLE_MAX_WIDTH = 460
+    BUBBLE_MAX_HEIGHT = 360
     CURSOR_SIZE = 48
     ACCENT_STRIPE_WIDTH = 3  # vertical accent on the leading edge of cards
